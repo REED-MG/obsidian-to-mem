@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Export Mem notes via List Notes API to CSV with:
+Export Mem notes IDs via List Notes API to CSV with:
 - .env support for MEM_API_KEY (python-dotenv)
 - Console progress updates
 - File + console logging
@@ -15,9 +15,10 @@ Setup:
   MEM_API_KEY=your_actual_mem_api_key_here
 
 Usage:
-  python export_mem_notes.py
-  python export_mem_notes.py --limit 500 --output mem_notes.csv --log-file mem_export.log
-  python export_mem_notes.py --api-key ...   # overrides .env
+  python export_mem_notesID.py
+  python export_mem_notesID.py --limit 500 --output mem_notes.csv --log-file mem_export.log
+  python export_mem_notesID.py --api-key ...   # overrides .env
+  python export_mem_notesID.py --debug         # enhanced diagnostics
 """
 
 from __future__ import annotations
@@ -293,6 +294,8 @@ def iter_notes(
             params["page"] = next_page
 
         logger.info("Fetching page %d (limit=%d)%s ...", page_num, limit, f", page={next_page}" if next_page else "")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Request URL=%s params=%s", url, params)
         data = request_with_rate_aware_retry(
             session=session,
             logger=logger,
@@ -302,13 +305,34 @@ def iter_notes(
             params=params,
         )
 
-        notes = data.get("notes", [])
+        total = data.get("total")
+
+        notes = data.get("notes")
+        if notes is None:
+            notes = data.get("results", [])
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Response keys=%s next_page=%s", sorted(data.keys()), data.get("next_page"))
+            logger.debug("Notes list source=%s count=%s", "notes" if "notes" in data else "results", len(notes) if isinstance(notes, list) else "n/a")
         if not isinstance(notes, list):
-            raise MemApiError(f"Unexpected response shape: 'notes' is not a list (got {type(notes)}).")
+            raise MemApiError(
+                "Unexpected response shape: expected list at 'notes' or 'results' "
+                f"(got {type(notes)})."
+            )
 
         batch_count = len(notes)
         total_notes += batch_count
         logger.info("Fetched page %d: %d notes (total so far: %d).", page_num, batch_count, total_notes)
+        if total is not None:
+            logger.info("API reported total notes: %s", total)
+        print(
+            f"Progress: {total_notes} notes processed across {page_num} pages"
+            + (f" (API total: {total})" if total is not None else ""),
+            flush=True,
+        )
+        if page_num == 1 and batch_count == 0:
+            logger.warning("First page returned zero notes. Check API key, base URL, and account permissions.")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("First page payload (truncated): %s", json.dumps(data, ensure_ascii=False)[:1000])
 
         for note in notes:
             if isinstance(note, dict):
@@ -362,6 +386,8 @@ def export_notes_to_csv(
                 logger.info("Progress: processed %d notes...", note_count)
 
         logger.info("Pass 1 complete: processed %d notes.", note_count)
+        if note_count == 0:
+            logger.warning("No notes were returned. Try --debug to inspect the API response.")
 
     rest = sorted([f for f in fieldnames_set if f not in preferred])
     fieldnames = [f for f in preferred if f in fieldnames_set] + rest
@@ -408,12 +434,14 @@ def main() -> int:
     parser.add_argument("--log-file", default="mem_export.log", help="Log file path (default: mem_export.log)")
     parser.add_argument("--base-url", default="https://api.mem.ai/v2", help="API base URL (default: https://api.mem.ai/v2)")
     parser.add_argument("--verbose", action="store_true", help="Verbose console logging (debug)")
+    parser.add_argument("--debug", action="store_true", help="Enable enhanced debug logging and diagnostics")
     args = parser.parse_args()
 
     # Load .env from current working directory (and do not overwrite already-set env vars)
     load_dotenv(override=False)
 
-    logger = setup_logger(args.log_file, args.verbose)
+    debug_enabled = args.verbose or args.debug
+    logger = setup_logger(args.log_file, debug_enabled)
 
     api_key = args.api_key or os.environ.get("MEM_API_KEY")
     if not api_key:
