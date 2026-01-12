@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+**** WORK IN PROGRESS ****
+
 Match Mem duplicate rows to Mem note IDs by title + created/modified dates (stdlib-only).
 
 Defaults:
@@ -33,7 +35,6 @@ Output:
 Usage:
   python match_duplicate_ids.py
   python match_duplicate_ids.py --root-dir /Users/markreed/Downloads/mem
-  python match_duplicate_ids.py --root-dir . --tol-seconds 120
 """
 
 from __future__ import annotations
